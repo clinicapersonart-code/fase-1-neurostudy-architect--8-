@@ -1,7 +1,7 @@
-
+﻿
 import React, { useState, useEffect, useRef } from 'react';
 import { InputType, ProcessingState, StudyGuide, StudySession, Folder, StudySource, StudyMode } from './types';
-import { generateStudyGuide, generateSlides, generateQuiz, generateFlashcards } from './services/geminiService';
+import { generateStudyGuide, generateSlides, generateQuiz, generateFlashcards, generateParetoSummary } from './services/geminiService';
 import { ResultsView } from './components/ResultsView';
 import { SlidesView } from './components/SlidesView';
 import { QuizView } from './components/QuizView';
@@ -9,7 +9,7 @@ import { FlashcardsView } from './components/FlashcardsView';
 import { ChatWidget } from './components/ChatWidget';
 import { Sidebar } from './components/Sidebar';
 import { MethodologyModal } from './components/MethodologyModal';
-import { BrainCircuit, UploadCloud, FileText, Video, Search, BookOpen, Monitor, HelpCircle, Plus, Trash, Zap, Link, Rocket, BatteryCharging, Activity, GraduationCap, Globe, Edit, CheckCircle, Layers, Camera, Target, ChevronRight } from './components/Icons';
+import { BrainCircuit, UploadCloud, FileText, Video, Search, BookOpen, Monitor, HelpCircle, Plus, Trash, Zap, Link, Rocket, BatteryCharging, Activity, GraduationCap, Globe, Edit, CheckCircle, Layers, Camera, Target, ChevronRight, Download, Printer } from './components/Icons';
 
 export function App() {
   // --- STATE ---
@@ -19,6 +19,7 @@ export function App() {
   const [folders, setFolders] = useState<Folder[]>([
     { id: 'default', name: 'Meus Estudos' },
     { id: 'biologia', name: 'Biologia' },
+    { id: 'pareto', name: 'Estudos Pareto' },
   ]);
   const [studies, setStudies] = useState<StudySession[]>([]);
   const [activeStudyId, setActiveStudyId] = useState<string | null>(null);
@@ -42,6 +43,9 @@ export function App() {
   // Methodology Modal State
   const [showMethodologyModal, setShowMethodologyModal] = useState(false);
 
+  // Simple password gate
+  const [isUnlocked, setIsUnlocked] = useState(false);
+
   const [processingState, setProcessingState] = useState<ProcessingState>({
     isLoading: false,
     error: null,
@@ -60,6 +64,20 @@ export function App() {
       setEditTitleInput('');
   }, [activeStudyId]);
 
+  const ensureUnlocked = (onSuccess: () => void) => {
+    if (isUnlocked) {
+      onSuccess();
+      return;
+    }
+    const input = window.prompt("Digite a senha de acesso:");
+    if (input && input.trim() === 'neurostudy2025') {
+      setIsUnlocked(true);
+      onSuccess();
+    } else {
+      alert("Senha incorreta.");
+    }
+  };
+
   // --- ACTIONS ---
 
   const createFolder = (name: string, parentId?: string) => {
@@ -73,7 +91,7 @@ export function App() {
   };
 
   const deleteFolder = (id: string) => {
-    if (id === 'default' || id === 'quick-studies') return; // Protect default and quick folders
+    if (id === 'default' || id === 'quick-studies' || id === 'pareto') return; // Protect default, quick and Pareto folders
     
     const idsToDelete = new Set<string>();
     const collectIds = (fid: string) => {
@@ -116,6 +134,7 @@ export function App() {
       slides: null,
       quiz: null,
       flashcards: null,
+      paretoText: '',
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -148,6 +167,10 @@ export function App() {
 
   const addSourceToStudy = async () => {
     if (!activeStudyId) return;
+    if (activeStudy?.mode === StudyMode.PARETO && activeStudy.sources.length >= 1) {
+      alert("Modo Pareto aceita apenas uma fonte por estudo.");
+      return;
+    }
 
     let content = '';
     let mimeType = '';
@@ -199,17 +222,18 @@ export function App() {
 
   // --- QUICK START LOGIC ---
   const handleQuickStart = async (content: string | File, type: InputType, mode: StudyMode = StudyMode.NORMAL) => {
-    // 1. Ensure Quick Study folder exists
-    let folderId = 'quick-studies';
-    let quickFolder = folders.find(f => f.id === folderId);
+    // 1. Ensure Quick or Pareto folder exists
+    const folderId = mode === StudyMode.PARETO ? 'pareto' : 'quick-studies';
+    const folderName = mode === StudyMode.PARETO ? 'Estudos Pareto' : 'Estudos Rapidos';
+    const quickFolder = folders.find(f => f.id === folderId);
     
     if (!quickFolder) {
-        const newFolder = { id: folderId, name: '⚡ Estudos Rápidos' };
+        const newFolder = { id: folderId, name: folderName };
         setFolders(prev => [...prev, newFolder]);
     }
 
     // 2. Create Study
-    const title = `Estudo ${mode === StudyMode.SURVIVAL ? 'Pareto 80/20' : 'Rápido'} - ${new Date().toLocaleTimeString()}`;
+    const title = `Estudo ${mode === StudyMode.PARETO ? 'Pareto 80/20' : 'Rapido'} - ${new Date().toLocaleTimeString()}`;
     const newStudy = createStudy(folderId, title, mode);
 
     // 3. Process Content
@@ -256,13 +280,12 @@ export function App() {
   const handleParetoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
-          // Use SURVIVAL mode which corresponds to Pareto 80/20 in the backend prompt
           let type = InputType.TEXT;
           if (file.type.includes('pdf')) type = InputType.PDF;
           else if (file.type.includes('video') || file.type.includes('audio')) type = InputType.VIDEO;
           else if (file.type.includes('image')) type = InputType.IMAGE;
           
-          handleQuickStart(file, type, StudyMode.SURVIVAL);
+          handleQuickStart(file, type, StudyMode.PARETO);
       }
   };
 
@@ -312,8 +335,38 @@ export function App() {
 
   // --- GENERATION HANDLERS ---
 
+  const handleGeneratePareto = async () => {
+    if (!activeStudy || activeStudy.sources.length === 0) return;
+    const source = activeStudy.sources[0];
+    const isBinary = source.type === InputType.PDF || source.type === InputType.VIDEO || source.type === InputType.IMAGE;
+    const isVideo = source.type === InputType.VIDEO;
+
+    setProcessingState({
+      isLoading: true,
+      error: null,
+      step: isVideo ? 'transcribing' : 'analyzing'
+    });
+
+    try {
+      const progressTimer = setTimeout(() => {
+        setProcessingState(prev => ({ ...prev, step: 'generating' }));
+      }, 3000);
+
+      const pareto = await generateParetoSummary(source.content, source.mimeType || 'text/plain', isBinary);
+      clearTimeout(progressTimer);
+
+      setStudies(prev => prev.map(s => s.id === activeStudyId ? { ...s, paretoText: pareto } : s));
+      setProcessingState({ isLoading: false, error: null, step: 'idle' });
+    } catch (err: any) {
+      setProcessingState({ isLoading: false, error: err.message, step: 'idle' });
+    }
+  };
+
   const handleGenerateGuide = async () => {
     if (!activeStudy || activeStudy.sources.length === 0) return;
+    if (activeStudy.mode === StudyMode.PARETO) {
+      return handleGeneratePareto();
+    }
     
     const source = activeStudy.sources[activeStudy.sources.length - 1]; 
     const isBinary = source.type === InputType.PDF || source.type === InputType.VIDEO || source.type === InputType.IMAGE;
@@ -347,6 +400,7 @@ export function App() {
 
   const handleRegenerateGuide = async (newMode: StudyMode) => {
       if (!activeStudy) return;
+      if (activeStudy.mode === StudyMode.PARETO) return;
       updateStudyMode(activeStudy.id, newMode);
       
       if (activeStudy.sources.length === 0) return;
@@ -446,7 +500,7 @@ export function App() {
                 onClick={() => setView('app')} 
                 className="text-gray-500 hover:text-indigo-600 font-medium text-sm transition-colors"
             >
-                Entrar no Painel →
+                Entrar no Painel
             </button>
         </header>
 
@@ -462,7 +516,7 @@ export function App() {
                         <span className="text-indigo-600">Comece a aprender.</span>
                     </h2>
                     <p className="text-xl text-slate-500 max-w-2xl mx-auto leading-relaxed">
-                        Transforme PDFs, Vídeos e Anotações em guias de estudo ativo, slides e quizzes automaticamente.
+                        Transforme PDFs, Videos e Anotacoes em guias de estudo ativo, slides e quizzes automaticamente.
                     </p>
                 </div>
 
@@ -475,7 +529,7 @@ export function App() {
                         <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 mb-4 group-hover:scale-110 transition-transform">
                             <Layers className="w-8 h-8" />
                         </div>
-                        <h3 className="text-lg font-bold text-gray-900">Método NeuroStudy</h3>
+                        <h3 className="text-lg font-bold text-gray-900">Metodo NeuroStudy</h3>
                         <p className="text-sm text-gray-500 mt-2 text-left">
                             Acesso completo. Pastas, roteiros, flashcards e professor virtual.
                         </p>
@@ -502,9 +556,9 @@ export function App() {
                             <div className="bg-red-100 p-3 rounded-xl text-red-600 mb-4 group-hover:scale-110 transition-transform">
                                 <Target className="w-8 h-8" />
                             </div>
-                            <h3 className="text-lg font-bold text-gray-900">Método Pareto 80/20</h3>
+                            <h3 className="text-lg font-bold text-gray-900">Metodo Pareto 80/20</h3>
                             <p className="text-sm text-gray-500 mt-2 text-left">
-                                Extração rápida. Apenas o essencial do arquivo. Sem pastas, sem login.
+                                Extração rápida. Apenas o essencial do arquivo.
                             </p>
                             <span className="mt-4 text-red-600 font-bold text-sm flex items-center gap-1">
                                 Carregar Arquivo Agora <ChevronRight className="w-4 h-4" />
@@ -520,7 +574,7 @@ export function App() {
                     </div>
                     <div className="flex flex-col items-center gap-2">
                          <Video className="w-6 h-6 text-gray-400" />
-                        <span className="text-xs font-bold text-gray-400">Vídeo Aulas</span>
+                        <span className="text-xs font-bold text-gray-400">VÃƒÂ­deo Aulas</span>
                     </div>
                     <div className="flex flex-col items-center gap-2">
                          <Camera className="w-6 h-6 text-gray-400" />
@@ -556,6 +610,8 @@ export function App() {
         onMoveStudy={moveStudy}
         onOpenMethodology={() => setShowMethodologyModal(true)}
         onFolderExam={handleFolderExam}
+        onGoHome={() => setView('landing')}
+        paretoFolderId="pareto"
       />
 
       {/* MAIN CONTENT AREA */}
@@ -595,38 +651,44 @@ export function App() {
             )}
             
             <div className="flex items-center gap-6">
-                <div className="flex bg-gray-100 p-1 rounded-lg">
-                    <button 
-                        onClick={() => setActiveTab('sources')}
-                        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${activeTab === 'sources' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        Fontes
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('guide')}
-                        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'guide' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        <BookOpen className="w-4 h-4" /> Roteiro
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('slides')}
-                        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'slides' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        <Monitor className="w-4 h-4" /> Slides
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('quiz')}
-                        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'quiz' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        <HelpCircle className="w-4 h-4" /> Quiz
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('flashcards')}
-                        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'flashcards' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        <Layers className="w-4 h-4" /> Cards
-                    </button>
-                </div>
+                {activeStudy.mode === StudyMode.PARETO ? (
+                  <div className="px-4 py-2 rounded-lg bg-indigo-50 text-indigo-700 font-semibold text-sm border border-indigo-100">
+                    Pareto 80/20
+                  </div>
+                ) : (
+                  <div className="flex bg-gray-100 p-1 rounded-lg">
+                      <button 
+                          onClick={() => setActiveTab('sources')}
+                          className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${activeTab === 'sources' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                          Fontes
+                      </button>
+                      <button 
+                          onClick={() => setActiveTab('guide')}
+                          className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'guide' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                          <BookOpen className="w-4 h-4" /> Roteiro
+                      </button>
+                      <button 
+                          onClick={() => setActiveTab('slides')}
+                          className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'slides' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                          <Monitor className="w-4 h-4" /> Slides
+                      </button>
+                      <button 
+                          onClick={() => setActiveTab('quiz')}
+                          className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'quiz' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                          <HelpCircle className="w-4 h-4" /> Quiz
+                      </button>
+                      <button 
+                          onClick={() => setActiveTab('flashcards')}
+                          className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'flashcards' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                          <Layers className="w-4 h-4" /> Cards
+                      </button>
+                  </div>
+                )}
             </div>
           </header>
         )}
@@ -639,15 +701,15 @@ export function App() {
                     {quickInputMode === 'none' ? (
                       <>
                         <div className="text-center mb-10">
-                            <h1 className="text-4xl font-extrabold text-gray-900 mb-4 tracking-tight">O que você vai <span className="text-indigo-600">aprender</span> hoje?</h1>
+                            <h1 className="text-4xl font-extrabold text-gray-900 mb-4 tracking-tight">O que voce vai <span className="text-indigo-600">aprender</span> hoje?</h1>
                             <p className="text-lg text-gray-500 max-w-xl mx-auto">
-                                Transforme qualquer conteúdo em conhecimento ativo instantaneamente. Escolha uma fonte para começar.
+                                Transforme qualquer conteudo em conhecimento ativo instantaneamente. Escolha uma fonte para comecar.
                             </p>
                         </div>
 
                         {/* Mode Selector for Quick Start */}
                          <div className="flex justify-center gap-4 mb-8">
-                            {[StudyMode.SURVIVAL, StudyMode.NORMAL, StudyMode.TURBO].map(mode => (
+                            {[StudyMode.SURVIVAL, StudyMode.NORMAL, StudyMode.TURBO, StudyMode.PARETO].map(mode => (
                                 <button
                                     key={mode}
                                     onClick={() => setSelectedMode(mode)}
@@ -656,7 +718,8 @@ export function App() {
                                     {mode === StudyMode.SURVIVAL && <BatteryCharging className="w-4 h-4" />}
                                     {mode === StudyMode.NORMAL && <Activity className="w-4 h-4" />}
                                     {mode === StudyMode.TURBO && <Rocket className="w-4 h-4" />}
-                                    <span className="text-sm font-bold capitalize">{mode === 'SURVIVAL' ? 'Sobrevivência' : mode}</span>
+                                    {mode === StudyMode.PARETO && <Layers className="w-4 h-4" />}
+                                    <span className="text-sm font-bold capitalize">{mode === 'SURVIVAL' ? 'Sobrevivencia' : mode === 'PARETO' ? 'Pareto 80/20' : mode === 'TURBO' ? 'Hard' : mode}</span>
                                 </button>
                             ))}
                         </div>
@@ -682,7 +745,7 @@ export function App() {
                                 <div className="p-3 bg-blue-50 rounded-full text-blue-600 mb-3 group-hover:bg-blue-600 group-hover:text-white transition-colors">
                                     <Video className="w-6 h-6" />
                                 </div>
-                                <h3 className="font-bold text-gray-900 mb-1">Vídeo/Áudio</h3>
+                                <h3 className="font-bold text-gray-900 mb-1">VÃƒÂ­deo/ÃƒÂudio</h3>
                                 <p className="text-xs text-gray-500 text-center">Transcrever aula.</p>
                                 <input type="file" accept="video/*,audio/*" className="hidden" onChange={(e) => {
                                     const file = e.target.files?.[0];
@@ -697,7 +760,7 @@ export function App() {
                                     <Camera className="w-6 h-6" />
                                 </div>
                                 <h3 className="font-bold text-gray-900 mb-1">Foto Caderno</h3>
-                                <p className="text-xs text-gray-500 text-center">Anotações/Livros.</p>
+                                <p className="text-xs text-gray-500 text-center">AnotaÃƒÂ§ÃƒÂµes/Livros.</p>
                                 <input type="file" accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => {
                                     const file = e.target.files?.[0];
                                     if(file) handleQuickStart(file, InputType.IMAGE, selectedMode);
@@ -740,14 +803,14 @@ export function App() {
                                     <Link className="w-6 h-6" />
                                 </div>
                                 <h3 className="font-bold text-gray-900 mb-1">Artigo DOI</h3>
-                                <p className="text-xs text-gray-500 text-center">Busca científica.</p>
+                                <p className="text-xs text-gray-500 text-center">Busca cientÃƒÂ­fica.</p>
                             </button>
                         </div>
 
                         {/* Recent Hint */}
                         <div className="mt-12 flex items-center gap-2 text-gray-400 text-sm">
                             <BrainCircuit className="w-4 h-4" />
-                            <span>Suas pastas recentes estão na barra lateral à esquerda.</span>
+                            <span>Suas pastas recentes estÃƒÂ£o na barra lateral ÃƒÂ  esquerda.</span>
                         </div>
                       </>
                     ) : (
@@ -762,14 +825,14 @@ export function App() {
                              <button onClick={() => setQuickInputMode('none')} className="text-gray-500 hover:text-gray-700">Cancelar</button>
                           </div>
                           
-                          <textarea
+                             <textarea
                              autoFocus
-                             className="w-full h-64 p-6 border border-gray-300 rounded-xl shadow-inner text-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none mb-4"
-                             placeholder={
+                                 className="w-full h-64 p-6 border border-gray-300 rounded-xl shadow-inner text-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none mb-4"
+                                 placeholder={
                                  inputType === InputType.DOI ? "Ex: 10.1038/s41586-020-2012-7" : 
-                                 inputType === InputType.URL ? "Ex: https://pt.wikipedia.org/wiki/Neurociência" :
-                                 "Cole o conteúdo aqui..."
-                             }
+                                 inputType === InputType.URL ? "Ex: https://pt.wikipedia.org/wiki/NeurociÃªncia" :
+                                 "Cole o conteudo aqui..."
+                                 }
                              value={inputText}
                              onChange={(e) => setInputText(e.target.value)}
                           ></textarea>
@@ -782,225 +845,288 @@ export function App() {
                              {selectedMode === StudyMode.TURBO && <Rocket className="w-5 h-5" />}
                              {selectedMode === StudyMode.NORMAL && <Activity className="w-5 h-5" />}
                              {selectedMode === StudyMode.SURVIVAL && <BatteryCharging className="w-5 h-5" />}
-                             Iniciar Estudo Agora ({selectedMode === 'SURVIVAL' ? 'Sobrevivência' : selectedMode})
+                             Iniciar Estudo Agora ({selectedMode === 'SURVIVAL' ? 'Sobrevivencia' : selectedMode})
                           </button>
                       </div>
                     )}
                 </div>
-            ) : (
+                        ) : (
                 // CONTENT VIEWS
                 <div className="max-w-5xl mx-auto">
-                    
-                    {/* --- SOURCES TAB --- */}
-                    {activeTab === 'sources' && (
-                        <div className="space-y-8 animate-fade-in">
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                {/* Upload Card */}
-                                <div className="bg-white p-6 rounded-xl paper-shadow border border-gray-100">
-                                    <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                        <UploadCloud className="w-5 h-5 text-indigo-500"/> Adicionar Fonte
-                                    </h3>
-                                    
-                                    <div className="space-y-4">
-                                        {/* Type Selector */}
-                                        <div className="flex bg-gray-100 p-1 rounded-lg">
-                                            <button onClick={() => setInputType(InputType.TEXT)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.TEXT ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Texto</button>
-                                            <button onClick={() => setInputType(InputType.PDF)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.PDF ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>PDF</button>
-                                            <button onClick={() => setInputType(InputType.IMAGE)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.IMAGE ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Imagem</button>
-                                            <button onClick={() => setInputType(InputType.VIDEO)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.VIDEO ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Vídeo</button>
-                                            <button onClick={() => setInputType(InputType.URL)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.URL ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Site</button>
-                                            <button onClick={() => setInputType(InputType.DOI)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.DOI ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>DOI</button>
-                                        </div>
-
-                                        {inputType === InputType.TEXT || inputType === InputType.DOI || inputType === InputType.URL ? (
-                                            <textarea
-                                                className="w-full h-32 p-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                                                placeholder={
-                                                    inputType === InputType.DOI ? "Cole o DOI aqui..." : 
-                                                    inputType === InputType.URL ? "Cole o link do site aqui..." :
-                                                    "Cole seu texto..."
-                                                }
-                                                value={inputText}
-                                                onChange={(e) => setInputText(e.target.value)}
-                                            />
-                                        ) : (
-                                            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
-                                                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                                                    <UploadCloud className="w-8 h-8 text-gray-400 mb-2" />
-                                                    <p className="text-sm text-gray-500">
-                                                        {selectedFile ? selectedFile.name : 
-                                                         inputType === InputType.IMAGE ? "Upload de Imagem (JPG, PNG)" :
-                                                         inputType === InputType.VIDEO ? "Upload de Vídeo/Áudio" :
-                                                         "Upload de PDF"}
-                                                    </p>
-                                                </div>
-                                                <input 
-                                                    type="file" 
-                                                    className="hidden" 
-                                                    accept={
-                                                        inputType === InputType.VIDEO ? "video/*,audio/*" : 
-                                                        inputType === InputType.IMAGE ? "image/png, image/jpeg, image/webp" :
-                                                        ".pdf"
-                                                    }
-                                                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                                                />
-                                            </label>
-                                        )}
-
-                                        <button 
-                                            onClick={addSourceToStudy}
-                                            disabled={(!inputText && !selectedFile)}
-                                            className="w-full bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                                        >
-                                            Adicionar ao Estudo
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* Sources List Card */}
-                                <div className="bg-white p-6 rounded-xl paper-shadow border border-gray-100">
-                                    <h3 className="font-bold text-gray-800 mb-4">Fontes Adicionadas ({activeStudy.sources.length})</h3>
-                                    {activeStudy.sources.length === 0 ? (
-                                        <p className="text-sm text-gray-400 italic">Nenhuma fonte adicionada.</p>
-                                    ) : (
-                                        <ul className="space-y-2 max-h-64 overflow-y-auto">
-                                            {activeStudy.sources.map(source => (
-                                                <li key={source.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 group">
-                                                    <div className="flex items-center gap-3 overflow-hidden">
-                                                        {source.type === InputType.PDF ? <FileText className="w-4 h-4 text-red-500"/> : 
-                                                         source.type === InputType.VIDEO ? <Video className="w-4 h-4 text-blue-500"/> : 
-                                                         source.type === InputType.IMAGE ? <Camera className="w-4 h-4 text-pink-500"/> : 
-                                                         source.type === InputType.DOI ? <Link className="w-4 h-4 text-emerald-500"/> : 
-                                                         source.type === InputType.URL ? <Globe className="w-4 h-4 text-cyan-500"/> :
-                                                         <FileText className="w-4 h-4 text-gray-500"/>}
-                                                        <span className="text-sm text-gray-700 truncate">{source.name}</span>
-                                                    </div>
-                                                    <button onClick={() => removeSource(source.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                        <Trash className="w-4 h-4" />
-                                                    </button>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                </div>
-                            </div>
-                            
-                            <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4">
-                                <div>
-                                    <h3 className="font-bold text-indigo-900 text-lg">Pronto para transformar?</h3>
-                                    <p className="text-indigo-700 text-sm">O NeuroStudy vai analisar suas fontes e criar o roteiro perfeito.</p>
-                                </div>
-                                <div className="flex items-center gap-4">
-                                    <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-indigo-200">
-                                        <span className="text-xs font-bold text-indigo-500 uppercase">Modo:</span>
-                                        {/* Replaced Select with Icon Buttons for Sources Tab */}
-                                        <div className="flex gap-1">
-                                            <button 
-                                                onClick={() => updateStudyMode(activeStudy.id, StudyMode.SURVIVAL)}
-                                                className={`p-1.5 rounded ${activeStudy.mode === StudyMode.SURVIVAL ? 'bg-green-100 text-green-700' : 'hover:bg-gray-100 text-gray-400'}`}
-                                                title="Sobrevivência"
-                                            >
-                                                <BatteryCharging className="w-4 h-4"/>
-                                            </button>
-                                            <button 
-                                                onClick={() => updateStudyMode(activeStudy.id, StudyMode.NORMAL)}
-                                                className={`p-1.5 rounded ${activeStudy.mode === StudyMode.NORMAL ? 'bg-blue-100 text-blue-700' : 'hover:bg-gray-100 text-gray-400'}`}
-                                                title="Normal"
-                                            >
-                                                <Activity className="w-4 h-4"/>
-                                            </button>
-                                            <button 
-                                                onClick={() => updateStudyMode(activeStudy.id, StudyMode.TURBO)}
-                                                className={`p-1.5 rounded ${activeStudy.mode === StudyMode.TURBO ? 'bg-purple-100 text-purple-700' : 'hover:bg-gray-100 text-gray-400'}`}
-                                                title="Turbo"
-                                            >
-                                                <Rocket className="w-4 h-4"/>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <button 
-                                        onClick={handleGenerateGuide}
-                                        disabled={activeStudy.sources.length === 0 || processingState.isLoading}
-                                        className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold text-lg hover:bg-indigo-700 shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-transform active:scale-[0.99]"
-                                    >
-                                        {processingState.isLoading ? (
-                                            <>
-                                                <span className="animate-spin text-white">⚙️</span> 
-                                                {processingState.step === 'transcribing' ? 'Transcrevendo Áudio...' :
-                                                 processingState.step === 'analyzing' ? 'Lendo Documento...' :
-                                                 processingState.step === 'generating' ? 'Escrevendo Roteiro...' : 
-                                                 'Processando...'}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <BrainCircuit className="w-5 h-5" /> Gerar Roteiro
-                                            </>
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
+                  {activeStudy.mode === StudyMode.PARETO ? (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-rose-50 border border-rose-100 rounded-2xl px-6 py-4 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                        <button 
+                          onClick={() => { setActiveStudyId(null); setActiveTab('sources'); setInputText(''); setSelectedFile(null); }}
+                          className="flex items-center gap-2 text-rose-700 font-semibold hover:text-rose-900"
+                        >
+                          <ChevronRight className="w-4 h-4 transform rotate-180" /> Analisar outro arquivo
+                        </button>
+                        <div className="flex flex-wrap justify-end gap-3">
+                          <button className="px-4 py-2 rounded-xl bg-white text-rose-700 font-semibold border border-rose-200 shadow-sm hover:-translate-y-[1px] transition">
+                            Salvar Obsidian
+                          </button>
+                          <button 
+                            onClick={() => window.print()}
+                            className="px-4 py-2 rounded-xl bg-white text-gray-700 font-semibold border border-gray-200 shadow-sm hover:-translate-y-[1px] transition flex items-center gap-2"
+                          >
+                            <Printer className="w-4 h-4" /> Imprimir
+                          </button>
+                          <button 
+                            onClick={() => window.print()}
+                            className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold shadow-md hover:bg-indigo-700 flex items-center gap-2"
+                          >
+                            <Download className="w-4 h-4" /> Download PDF
+                          </button>
                         </div>
-                    )}
+                      </div>
 
-                    {/* --- GUIDE TAB --- */}
-                    {activeTab === 'guide' && (
-                        activeStudy.guide ? (
-                            <ResultsView 
-                                guide={activeStudy.guide} 
-                                onReset={() => setActiveTab('sources')}
-                                onGenerateQuiz={() => setActiveTab('quiz')}
-                                onUpdateGuide={(newGuide) => updateStudyGuide(activeStudyId, newGuide)}
-                            />
-                        ) : (
-                            <div className="text-center py-20 text-gray-400">
-                                <p>Nenhum roteiro gerado ainda. Adicione fontes e clique em Gerar.</p>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div className="bg-white p-6 rounded-2xl paper-shadow border border-rose-100 shadow-lg">
+                          <h3 className="font-extrabold text-gray-900 mb-2 flex items-center gap-2 text-lg">
+                            <UploadCloud className="w-5 h-5 text-rose-600"/> Fonte Unica (Pareto)
+                          </h3>
+                          <p className="text-sm text-rose-700 mb-4">Modo Pareto aceita apenas uma fonte por estudo.</p>
+                          <div className="space-y-4">
+                            <div className="flex bg-rose-50 p-1 rounded-lg border border-rose-100">
+                              <button onClick={() => setInputType(InputType.TEXT)} className={`flex-1 py-1.5 text-xs font-semibold rounded ${inputType === InputType.TEXT ? 'bg-white shadow text-rose-700' : 'text-rose-500 hover:text-rose-700'}`}>Texto</button>
+                              <button onClick={() => setInputType(InputType.PDF)} className={`flex-1 py-1.5 text-xs font-semibold rounded ${inputType === InputType.PDF ? 'bg-white shadow text-rose-700' : 'text-rose-500 hover:text-rose-700'}`}>PDF</button>
+                              <button onClick={() => setInputType(InputType.IMAGE)} className={`flex-1 py-1.5 text-xs font-semibold rounded ${inputType === InputType.IMAGE ? 'bg-white shadow text-rose-700' : 'text-rose-500 hover:text-rose-700'}`}>Imagem</button>
+                              <button onClick={() => setInputType(InputType.VIDEO)} className={`flex-1 py-1.5 text-xs font-semibold rounded ${inputType === InputType.VIDEO ? 'bg-white shadow text-rose-700' : 'text-rose-500 hover:text-rose-700'}`}>Video</button>
+                              <button onClick={() => setInputType(InputType.URL)} className={`flex-1 py-1.5 text-xs font-semibold rounded ${inputType === InputType.URL ? 'bg-white shadow text-rose-700' : 'text-rose-500 hover:text-rose-700'}`}>Site</button>
+                              <button onClick={() => setInputType(InputType.DOI)} className={`flex-1 py-1.5 text-xs font-semibold rounded ${inputType === InputType.DOI ? 'bg-white shadow text-rose-700' : 'text-rose-500 hover:text-rose-700'}`}>DOI</button>
                             </div>
-                        )
-                    )}
 
-                    {/* --- SLIDES TAB --- */}
-                    {activeTab === 'slides' && (
-                         <div className="animate-fade-in">
-                            {activeStudy.slides ? (
-                                <SlidesView slides={activeStudy.slides} />
+                            {(inputType === InputType.TEXT || inputType === InputType.DOI || inputType === InputType.URL) ? (
+                              <textarea
+                                className="w-full h-32 p-3 border border-rose-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:border-rose-500 bg-rose-50"
+                                placeholder={
+                                  inputType === InputType.DOI ? "Cole o DOI aqui..." : 
+                                  inputType === InputType.URL ? "Cole o link do site aqui..." :
+                                  "Cole seu texto..."
+                                }
+                                value={inputText}
+                                onChange={(e) => setInputText(e.target.value)}
+                              />
                             ) : (
-                                <div className="flex flex-col items-center justify-center py-20 text-center">
-                                    <Monitor className="w-16 h-16 text-gray-200 mb-4" />
-                                    <h3 className="text-xl font-bold text-gray-700 mb-2">Slides de Aula</h3>
-                                    <p className="text-gray-500 mb-6 max-w-md">Gere uma apresentação estruturada pronta para usar ou revisar, baseada no seu roteiro.</p>
-                                    <button 
-                                        onClick={handleGenerateSlides}
-                                        disabled={!activeStudy.guide || processingState.isLoading}
-                                        className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50"
-                                    >
-                                        {processingState.isLoading ? 'Criando Slides...' : 'Gerar Slides Agora'}
-                                    </button>
+                              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-rose-200 rounded-xl cursor-pointer bg-rose-50 hover:bg-rose-100">
+                                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                                  <UploadCloud className="w-8 h-8 text-rose-500 mb-2" />
+                                  <p className="text-sm text-rose-600">
+                                    {selectedFile ? selectedFile.name : 
+                                      inputType === InputType.IMAGE ? "Upload de Imagem (JPG, PNG)" :
+                                      inputType === InputType.VIDEO ? "Upload de Video/Audio" :
+                                      "Upload de PDF"}
+                                  </p>
                                 </div>
+                                <input 
+                                  type="file" 
+                                  className="hidden" 
+                                  accept={
+                                    inputType === InputType.VIDEO ? "video/*,audio/*" : 
+                                    inputType === InputType.IMAGE ? "image/png, image/jpeg, image/webp" :
+                                    ".pdf"
+                                  }
+                                  onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                                />
+                              </label>
                             )}
-                         </div>
-                    )}
 
-                    {/* --- QUIZ TAB --- */}
-                    {activeTab === 'quiz' && (
-                         <div className="animate-fade-in">
-                            <QuizView 
-                                questions={activeStudy.quiz || []}
-                                onGenerate={handleGenerateQuiz}
-                                onClear={handleClearQuiz}
-                            />
-                         </div>
-                    )}
+                            <button 
+                              onClick={addSourceToStudy}
+                              disabled={(!inputText && !selectedFile) || activeStudy.sources.length >= 1}
+                              className="w-full bg-rose-600 text-white py-2 rounded-lg font-semibold hover:bg-rose-700 disabled:opacity-50 transition-colors shadow-sm"
+                            >
+                              {activeStudy.sources.length >= 1 ? 'Apenas uma fonte permitida' : 'Adicionar ao Estudo'}
+                            </button>
+                          </div>
+                        </div>
 
-                    {/* --- FLASHCARDS TAB --- */}
-                    {activeTab === 'flashcards' && (
-                         <div className="animate-fade-in">
-                            <FlashcardsView 
-                                cards={activeStudy.flashcards || []}
-                                onGenerate={handleGenerateFlashcards}
-                            />
-                         </div>
-                    )}
+                        <div className="bg-white p-6 rounded-2xl paper-shadow border border-rose-100 shadow-lg">
+                          <h3 className="font-extrabold text-gray-900 mb-2 text-lg">Fonte Adicionada ({activeStudy.sources.length}/1)</h3>
+                          {activeStudy.sources.length === 0 ? (
+                            <p className="text-sm text-rose-700 italic">Nenhuma fonte adicionada.</p>
+                          ) : (
+                            <ul className="space-y-2">
+                              {activeStudy.sources.map(source => (
+                                <li key={source.id} className="flex items-center justify-between p-3 bg-rose-50 rounded-lg border border-rose-100">
+                                  <div className="flex items-center gap-3 overflow-hidden">
+                                    {source.type === InputType.PDF ? <FileText className="w-4 h-4 text-red-500"/> : 
+                                      source.type === InputType.VIDEO ? <Video className="w-4 h-4 text-blue-500"/> : 
+                                      source.type === InputType.IMAGE ? <Camera className="w-4 h-4 text-pink-500"/> : 
+                                      source.type === InputType.DOI ? <Link className="w-4 h-4 text-emerald-500"/> : 
+                                      source.type === InputType.URL ? <Globe className="w-4 h-4 text-cyan-500"/> :
+                                      <FileText className="w-4 h-4 text-gray-500"/>}
+                                    <span className="text-sm text-gray-700 truncate">{source.name}</span>
+                                  </div>
+                                  <button onClick={() => removeSource(source.id)} className="text-rose-500 hover:text-rose-700 transition-opacity">
+                                    <Trash className="w-4 h-4" />
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      </div>
 
+                      <div className="bg-rose-100 border border-rose-200 p-6 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-inner">
+                        <div>
+                          <h3 className="font-black text-rose-900 text-lg">Pronto para o Pareto 80/20?</h3>
+                          <p className="text-rose-700 text-sm">Vamos extrair so o essencial e os detalhes de suporte.</p>
+                        </div>
+                        <button 
+                          onClick={handleGeneratePareto}
+                          disabled={activeStudy.sources.length === 0 || processingState.isLoading}
+                          className="bg-rose-600 text-white px-8 py-3 rounded-xl font-bold text-lg hover:bg-rose-700 shadow-lg shadow-rose-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-transform active:scale-[0.99]"
+                        >
+                          {processingState.isLoading ? (
+                            <>
+                              <span className="animate-spin text-white">?</span> 
+                              {processingState.step === 'transcribing' ? 'Transcrevendo Audio...' :
+                                processingState.step === 'analyzing' ? 'Lendo Documento...' :
+                                processingState.step === 'generating' ? 'Escrevendo Pareto...' : 
+                                'Processando...'}
+                            </>
+                          ) : (
+                            <>
+                              <BrainCircuit className="w-5 h-5" /> Gerar Pareto
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {activeStudy.paretoText && (
+                        <div className="relative overflow-hidden rounded-[28px] shadow-2xl bg-white border border-rose-100">
+                          <div className="h-2 bg-gradient-to-r from-rose-600 via-red-500 to-orange-300" />
+                          <div className="p-8 lg:p-10 space-y-6">
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <p className="text-xs font-bold uppercase tracking-wide text-rose-600 mb-1">Pareto 80/20</p>
+                                <h1 className="text-3xl lg:text-4xl font-black text-gray-900 leading-tight">{activeStudy.title || 'Essencia Pareto 80/20'}</h1>
+                              </div>
+                              <span className="px-3 py-1 rounded-full bg-rose-100 text-rose-700 text-xs font-bold uppercase tracking-wide border border-rose-200">Modo Simplificado</span>
+                            </div>
+                            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-6 lg:p-7">
+                              <div className="flex items-center gap-2 text-rose-700 font-semibold uppercase tracking-wide text-xs mb-3">
+                                <Target className="w-4 h-4 text-rose-600" />
+                                <span>Essencia Pareto 80/20</span>
+                              </div>
+                              <div className="text-lg leading-relaxed text-rose-900 whitespace-pre-line font-serif">
+                                {activeStudy.paretoText}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                                    ) : (\n                    <>
+                              <BrainCircuit className="w-5 h-5" /> Gerar Pareto
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {activeStudy.paretoText && (
+                        <div className="bg-white p-6 rounded-xl paper-shadow border border-gray-100 space-y-4">
+                          <div className="flex items-center gap-2">
+                            <Layers className="w-5 h-5 text-indigo-600" />
+                            <h3 className="font-bold text-gray-800 text-lg">PARETO 80/20 â€” Essencia do conteudo</h3>
+                          </div>
+                          <pre className="whitespace-pre-wrap text-sm text-gray-700 leading-relaxed">{activeStudy.paretoText}</pre>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {/* --- SOURCES TAB --- */}
+                      {activeTab === 'sources' && (
+                          <div className="space-y-8 animate-fade-in">
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                  <div className="bg-white p-6 rounded-xl paper-shadow border border-gray-100">
+                                      <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                          <UploadCloud className="w-5 h-5 text-indigo-500"/> Adicionar Fonte
+                                      </h3>
+                                      <div className="space-y-4">
+                                          <div className="flex bg-gray-100 p-1 rounded-lg">
+                                          </div>
+
+                                          {(inputType === InputType.TEXT || inputType === InputType.DOI || inputType === InputType.URL) ? (
+                                              <textarea
+                                                  className="w-full h-32 p-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                                  placeholder={
+                                                      inputType === InputType.DOI ? "Cole o DOI aqui..." : 
+                                                      inputType === InputType.URL ? "Cole o link do site aqui..." :
+                                                      "Cole seu texto..."
+                                                  }
+                                                  value={inputText}
+                                                  onChange={(e) => setInputText(e.target.value)}
+                                              />
+                                                            ) : (\n                    <>
+                                                  <BrainCircuit className="w-5 h-5" /> Gerar Roteiro
+                                              </>
+                                          )}
+                                      </button>
+                                  </div>
+                              </div>
+                          </div>
+                      )}
+
+                      {activeTab === 'guide' && (
+                          activeStudy.guide ? (
+                              <ResultsView 
+                                  guide={activeStudy.guide} 
+                                  onReset={() => setActiveTab('sources')}
+                                  onGenerateQuiz={() => setActiveTab('quiz')}
+                                  onUpdateGuide={(newGuide) => updateStudyGuide(activeStudyId, newGuide)}
+                              />
+                          ) : (
+                              <div className="text-center py-20 text-gray-400">
+                                  <p>Nenhum roteiro gerado ainda. Adicione fontes e clique em Gerar.</p>
+                              </div>
+                          )
+                      )}
+
+                      {activeTab === 'slides' && (
+                           <div className="animate-fade-in">
+                              {activeStudy.slides ? (
+                                  <SlidesView slides={activeStudy.slides} />
+                              ) : (
+                                  <div className="flex flex-col items-center justify-center py-20 text-center">
+                                      <Monitor className="w-16 h-16 text-gray-200 mb-4" />
+                                      <h3 className="text-xl font-bold text-gray-700 mb-2">Slides de Aula</h3>
+                                      <p className="text-gray-500 mb-6 max-w-md">Gere uma apresentacao estruturada pronta para usar ou revisar, baseada no seu roteiro.</p>
+                                      <button 
+                                          onClick={handleGenerateSlides}
+                                          disabled={!activeStudy.guide || processingState.isLoading}
+                                          className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50"
+                                      >
+                                          {processingState.isLoading ? 'Criando Slides...' : 'Gerar Slides Agora'}
+                                      </button>
+                                  </div>
+                              )}
+                           </div>
+                      )}
+
+                      {activeTab === 'quiz' && (
+                           <div className="animate-fade-in">
+                              <QuizView 
+                                  questions={activeStudy.quiz || []}
+                                  onGenerate={handleGenerateQuiz}
+                                  onClear={handleClearQuiz}
+                              />
+                           </div>
+                      )}
+
+                      {activeTab === 'flashcards' && (
+                           <div className="animate-fade-in">
+                              <FlashcardsView 
+                                  cards={activeStudy.flashcards || []}
+                                  onGenerate={handleGenerateFlashcards}
+                              />
+                           </div>
+                      )}
+                    </>
+                  )}
                 </div>
             )}
         </main>
@@ -1017,3 +1143,26 @@ export function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

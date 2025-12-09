@@ -58,17 +58,135 @@ const fetchDoiMetadata = async (doi: string): Promise<{ title: string, abstract:
   }
 };
 
+// Helper: safely get API key for browser (Vite) or Node
+const getApiKey = (): string | undefined => {
+  const viteKey = typeof import.meta !== "undefined" ? (import.meta as any).env?.VITE_API_KEY : undefined;
+  const nodeKey = typeof globalThis !== "undefined" ? (globalThis as any).process?.env?.API_KEY : undefined;
+  return viteKey || nodeKey;
+};
+
+export const generateParetoSummary = async (
+  content: string,
+  mimeType: string,
+  isBinary: boolean = false
+): Promise<string> => {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const modelName = 'gemini-2.5-flash';
+
+  let contentInstructions = "";
+  if (isBinary && (mimeType.startsWith('video/') || mimeType.startsWith('audio/'))) {
+    contentInstructions = "O conteudo e um VIDEO/AUDIO. Leia como se tivesse transcrito e resuma aplicando Pareto.";
+  } else if (isBinary && mimeType.startsWith('image/')) {
+    contentInstructions = "O conteudo e uma IMAGEM de anotation/livro. Transcreva mentalmente o texto e aplique Pareto.";
+  } else {
+    contentInstructions = "O conteudo e TEXTO (PDF/Artigo/Livro/Site).";
+  }
+
+  const PARETO_PROMPT = `
+Voce e um Arquiteto de Aprendizagem especialista em Pareto 80/20.
+Entregue um resumo conciso em PT-BR com exatamente duas secoes:
+
+[ESSENCIA 20%]
+- Destile apenas a estrutura central, ideias-matriz e relacoes causa-efeito.
+- Texto corrido curto (2-5 linhas), sem bullet decorativo.
+
+[SUPORTE 80%]
+- Liste de forma objetiva os detalhes, exemplos, excecoes e nuances.
+- Use bullets curtos e diretos.
+
+Regras:
+- Nao use JSON ou estruturas de codigo.
+- Nao invente topicos fora do conteudo.
+- Se o material estiver em ingles, traduza para PT-BR.
+${contentInstructions}
+`;
+
+  const parts = [];
+  const doiRegex = /\b(10\.\d{4,9}\/[-._;()/:A-Z0-9]+)\b/i;
+  const urlRegex = /^(http|https):\/\/[^ "]+$/;
+
+  const isDoi = !isBinary && doiRegex.test(content);
+  const isUrl = !isBinary && !isDoi && (urlRegex.test(content.trim()) || content.trim().startsWith('www'));
+
+  if (isDoi) {
+    const identifier = content.trim();
+    const metadata = await fetchDoiMetadata(identifier);
+
+    if (metadata && metadata.title) {
+        const instruction = `
+          O usuario forneceu um DOI: "${identifier}".
+          Metadados reais:
+          TITULO: "${metadata.title}"
+          RESUMO/CONTEXTO: "${metadata.abstract}"
+          
+          Use essas informacoes reais como base. Entregue apenas o resumo Pareto em texto livre.
+        `;
+        parts.push({ text: instruction });
+    } else {
+        const instruction = `
+          DOI recebido: "${identifier}".
+          Nao conseguimos metadados externos. Use conhecimento interno sobre o tema provavel e produza o resumo Pareto em texto livre.
+        `;
+        parts.push({ text: instruction });
+    }
+  } else if (isUrl) {
+    const identifier = content.trim();
+    const instruction = `
+      O usuario forneceu um Link/URL: "${identifier}".
+      Use conhecimento interno sobre o tema do link para gerar o resumo Pareto 80/20 em texto.
+      Se nao tiver acesso direto, infira o assunto pelo nome e resuma.
+    `;
+    parts.push({ text: instruction });
+  } else if (isBinary) {
+    parts.push({
+      inlineData: {
+        mimeType: mimeType,
+        data: content, 
+      },
+    });
+    parts.push({ text: "Transcreva mentalmente o conteudo recebido e aplique Pareto 80/20 em texto corrido." });
+  } else {
+    parts.push({ text: content });
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: { role: 'user', parts: parts },
+      config: {
+        systemInstruction: PARETO_PROMPT,
+        responseMimeType: "text/plain",
+        temperature: 0.35,
+      },
+    });
+
+    const rawText = typeof (response as any).text === 'function' ? await (response as any).text() : (response as any).text;
+    const text = rawText || "";
+    if (!text) throw new Error("No response from AI");
+    return text;
+  } catch (error) {
+    console.error("Gemini API Error (Pareto Summary):", error);
+    throw error;
+  }
+};
+
 export const generateStudyGuide = async (
   content: string,
   mimeType: string,
   mode: StudyMode = StudyMode.NORMAL,
   isBinary: boolean = false
 ): Promise<StudyGuide> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API_KEY not found in environment variables.");
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-2.5-flash'; 
 
   let modeInstructions = "";
@@ -215,7 +333,8 @@ Analise o conteúdo e gere o JSON.
       },
     });
 
-    const text = response.text;
+    const rawText = typeof (response as any).text === 'function' ? await (response as any).text() : (response as any).text;
+    const text = rawText || "";
     if (!text) throw new Error("No response from AI");
     
     // Parse response and inject 'completed' state
@@ -235,9 +354,10 @@ Analise o conteúdo e gere o JSON.
 };
 
 export const generateSlides = async (guide: StudyGuide): Promise<Slide[]> => {
-  if (!process.env.API_KEY) throw new Error("API_KEY not found");
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-2.5-flash';
 
   const prompt = `
@@ -267,7 +387,8 @@ export const generateSlides = async (guide: StudyGuide): Promise<Slide[]> => {
     config: { responseMimeType: "application/json", responseSchema: schema },
   });
 
-  return JSON.parse(response.text || "[]") as Slide[];
+  const rawText = typeof (response as any).text === 'function' ? await (response as any).text() : (response as any).text;
+  return JSON.parse(rawText || "[]") as Slide[];
 };
 
 export const generateQuiz = async (
@@ -275,9 +396,10 @@ export const generateQuiz = async (
     mode: StudyMode, 
     config?: { quantity: number, difficulty: 'easy' | 'medium' | 'hard' | 'mixed' }
 ): Promise<QuizQuestion[]> => {
-  if (!process.env.API_KEY) throw new Error("API_KEY not found");
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-2.5-flash';
 
   let questionCount = config?.quantity || 6;
@@ -350,13 +472,15 @@ export const generateQuiz = async (
     },
   });
 
-  return JSON.parse(response.text || "[]") as QuizQuestion[];
+  const rawText = typeof (response as any).text === 'function' ? await (response as any).text() : (response as any).text;
+  return JSON.parse(rawText || "[]") as QuizQuestion[];
 };
 
 export const generateFlashcards = async (guide: StudyGuide): Promise<Flashcard[]> => {
-  if (!process.env.API_KEY) throw new Error("API_KEY not found");
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-2.5-flash';
 
   const context = {
@@ -398,7 +522,8 @@ export const generateFlashcards = async (guide: StudyGuide): Promise<Flashcard[]
     },
   });
 
-  return JSON.parse(response.text || "[]") as Flashcard[];
+  const rawText = typeof (response as any).text === 'function' ? await (response as any).text() : (response as any).text;
+  return JSON.parse(rawText || "[]") as Flashcard[];
 };
 
 export const sendChatMessage = async (
@@ -406,9 +531,10 @@ export const sendChatMessage = async (
   newMessage: string,
   studyGuideContext?: StudyGuide | null
 ): Promise<string> => {
-  if (!process.env.API_KEY) throw new Error("API_KEY not found");
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-3-pro-preview';
 
   let contextString = "";
@@ -446,8 +572,9 @@ export const sendChatMessage = async (
 };
 
 export const refineContent = async (text: string, task: 'simplify' | 'example' | 'mnemonic'): Promise<string> => {
-  if (!process.env.API_KEY) throw new Error("API_KEY not found");
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-2.5-flash';
 
   let prompt = "";
@@ -463,8 +590,9 @@ export const refineContent = async (text: string, task: 'simplify' | 'example' |
 };
 
 export const generateDiagram = async (description: string): Promise<string> => {
-  if (!process.env.API_KEY) throw new Error("API_KEY not found");
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY não configurada. Defina VITE_API_KEY no .env.local.");
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-2.5-flash-image'; 
 
   const prompt = `Create a clear, educational, white-background diagram visualizing: ${description}. Clean academic style.`;

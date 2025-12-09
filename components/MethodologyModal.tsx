@@ -244,14 +244,14 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ onClose }) =
                         </div>
                     </div>
 
-                    {/* Turbo */}
+                    {/* Hard */}
                     <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
                          <div className="flex items-start gap-3">
                             <div className="bg-white text-purple-600 p-2 rounded-lg shadow-sm border border-purple-100 shrink-0">
                                 <Rocket className="w-6 h-6"/>
                             </div>
                             <div>
-                                <h4 className="font-bold text-purple-900 mb-1">Turbo</h4>
+                                <h4 className="font-bold text-purple-900 mb-1">Hard</h4>
                                 <p className="text-xs text-purple-800 leading-relaxed">
                                     Extraia 100% do conteúdo. Checkpoints frequentes e granularidade alta.
                                 </p>
@@ -333,3 +333,4 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ onClose }) =
     </div>
   );
 };
+

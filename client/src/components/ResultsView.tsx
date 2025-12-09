@@ -267,7 +267,7 @@ ${cp.imageUrl ? `![Diagrama](${cp.imageUrl})` : ''}
         {isParetoOnly && onUnlockFullStudy && (
             <div className="mt-8 bg-white p-8 rounded-xl border-2 border-dashed border-gray-200 text-center animate-fade-in">
                 <h3 className="text-lg font-bold text-gray-800 mb-2">Quer ir além do resumo?</h3>
-                <p className="text-gray-500 mb-6 max-w-lg mx-auto">O NeuroStudy gerou a essência. Para um estudo ativo completo com quiz e slides, mude o modo para "Normal" ou "Turbo".</p>
+                <p className="text-gray-500 mb-6 max-w-lg mx-auto">O NeuroStudy gerou a essência. Para um estudo ativo completo com quiz e slides, mude o modo para "Normal" ou "Hard".</p>
                 <button onClick={onUnlockFullStudy} className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-transform active:scale-95 flex items-center gap-2 mx-auto">
                     <Layers className="w-5 h-5"/> Sair do Modo Pareto <ChevronRight className="w-4 h-4"/>
                 </button>

@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Folder, StudySession } from '../types';
-import { FolderIcon, Plus, FileText, ChevronRight, ChevronDown, Trash, BookOpen, X, Edit, CornerDownRight, GraduationCap } from './Icons';
+import { FolderIcon, Plus, FileText, ChevronRight, ChevronDown, Trash, BookOpen, X, Edit, CornerDownRight, GraduationCap, Home } from './Icons';
 
 interface SidebarProps {
   folders: Folder[];
@@ -17,6 +17,8 @@ interface SidebarProps {
   onMoveStudy: (studyId: string, targetFolderId: string) => void;
   onOpenMethodology: () => void;
   onFolderExam: (folderId: string) => void;
+  onGoHome?: () => void;
+  paretoFolderId?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -32,9 +34,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onMoveFolder,
   onMoveStudy,
   onOpenMethodology,
-  onFolderExam
+  onFolderExam,
+  onGoHome,
+  paretoFolderId
 }) => {
-  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({'default': true, 'quick-studies': true});
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({'default': true, 'quick-studies': true, 'pareto': true});
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   
@@ -50,6 +54,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Drag and Drop State
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [dragOverHeader, setDragOverHeader] = useState(false);
+  const paretoTree = paretoFolderId ? folders.filter(f => f.id === paretoFolderId || f.parentId === paretoFolderId) : [];
+  const standardTree = paretoFolderId ? folders.filter(f => f.id !== paretoFolderId && f.parentId !== paretoFolderId) : folders;
 
   const toggleFolder = (folderId: string) => {
     setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
@@ -126,8 +132,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
 
   // Recursive component for rendering folder tree
-  const renderFolderTree = (parentId: string | undefined, depth: number = 0) => {
-    const currentLevelFolders = folders.filter(f => f.parentId === parentId);
+  const renderFolderTree = (parentId: string | undefined, depth: number = 0, tree: Folder[] = folders) => {
+    const currentLevelFolders = tree.filter(f => f.parentId === parentId);
     
     // Always render if root to allow drop, but if checking emptiness for recursive call:
     if (currentLevelFolders.length === 0 && parentId !== undefined && studies.filter(s => s.folderId === parentId).length === 0 && creatingSubfolderIn !== parentId && creatingStudyInFolder !== parentId) {
@@ -138,8 +144,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       const folderStudies = studies.filter(s => s.folderId === folder.id);
       const isOpen = expandedFolders[folder.id];
       // 'default' can be renamed now, but not deleted. 'quick-studies' is fully locked.
-      const isDeletable = folder.id !== 'default' && folder.id !== 'quick-studies';
-      const isRenamable = folder.id !== 'quick-studies';
+      const isDeletable = folder.id !== 'default' && folder.id !== 'quick-studies' && folder.id !== paretoFolderId;
+      const isRenamable = folder.id !== 'quick-studies' && folder.id !== paretoFolderId;
 
       const isDragOver = dragOverFolderId === folder.id;
 
@@ -239,7 +245,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                )}
 
                {/* Render Subfolders */}
-               {renderFolderTree(folder.id, depth + 1)}
+               {renderFolderTree(folder.id, depth + 1, tree)}
 
                {/* Create Study Action */}
                <div style={{ marginLeft: `${(depth + 1) * 12 + 8}px` }}>
@@ -306,14 +312,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onDragLeave={handleDragLeave}
         onDrop={(e) => handleDrop(e)} // Drop on header = Move to Root (for folders) or Default (for studies)
       >
-        <h1 className="text-xl font-bold text-indigo-900 flex items-center gap-2">
-           <BookOpen className="w-6 h-6 text-indigo-600"/> NeuroStudy
-        </h1>
+        <button 
+          type="button"
+          onClick={onGoHome}
+          className={`text-xl font-bold text-indigo-900 flex items-center justify-between w-full gap-3 ${onGoHome ? 'hover:text-indigo-700 transition-colors' : 'cursor-default'}`}
+        >
+           <span className="flex items-center gap-2">
+             <BookOpen className="w-6 h-6 text-indigo-600"/> 
+             <span>NeuroStudy</span>
+           </span>
+           <Home className="w-5 h-5 text-indigo-600 ml-6" />
+        </button>
         {dragOverHeader && <p className="text-xs text-indigo-500 mt-1">Soltar para mover para Raiz</p>}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
-        {renderFolderTree(undefined)}
+      <div className="flex-1 overflow-y-auto p-2 scrollbar-thin space-y-4">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-400 px-2 mb-1">Estudos</p>
+          {renderFolderTree(undefined, 0, standardTree)}
+        </div>
+        {paretoFolderId && (
+          <div>
+            <p className="text-xs uppercase tracking-wide text-gray-400 px-2 mb-1">Pareto</p>
+            {renderFolderTree(undefined, 0, paretoTree)}
+          </div>
+        )}
       </div>
 
       <div className="p-4 border-t border-gray-200 bg-gray-50 space-y-3">

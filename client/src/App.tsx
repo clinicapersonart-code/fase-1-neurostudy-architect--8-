@@ -1,7 +1,7 @@
-
+﻿
 import React, { useState, useEffect, useRef } from 'react';
 import { InputType, ProcessingState, StudyGuide, StudySession, Folder, StudySource, StudyMode } from './types';
-import { generateStudyGuide, generateSlides, generateQuiz, generateFlashcards } from './services/geminiService';
+import { generateStudyGuide, generateSlides, generateQuiz, generateFlashcards, generateParetoSummary } from './services/geminiService';
 import { ResultsView } from './components/ResultsView';
 import { SlidesView } from './components/SlidesView';
 import { QuizView } from './components/QuizView';
@@ -178,7 +178,7 @@ export function App() {
     let folderId = 'quick-studies';
     let quickFolder = folders.find(f => f.id === folderId);
     if (!quickFolder) {
-        const newFolder = { id: folderId, name: '⚡ Estudos Rápidos' };
+        const newFolder = { id: folderId, name: 'Estudos Rapidos' };
         setFolders(prev => [...prev, newFolder]);
     }
     const title = `Pareto 80/20: ${content instanceof File ? content.name : 'Novo Arquivo'}`;
@@ -229,7 +229,7 @@ export function App() {
           if (file.type.includes('pdf')) type = InputType.PDF;
           else if (file.type.includes('video') || file.type.includes('audio')) type = InputType.VIDEO;
           else if (file.type.includes('image')) type = InputType.IMAGE;
-          handleQuickStart(file, type, StudyMode.SURVIVAL, true);
+          handleQuickStart(file, type, StudyMode.PARETO, true);
       }
   };
 
@@ -252,11 +252,11 @@ export function App() {
       const folderStudies = studies.filter(s => s.folderId === folderId && s.guide !== null);
 
       if (folderStudies.length === 0) {
-          alert("Esta pasta não tem estudos com roteiros gerados para criar um provão.");
+          alert("Esta pasta nao tem estudos com roteiros gerados para criar um provao.");
           return;
       }
 
-      const megaSubject = `Provão: ${folder.name}`;
+      const megaSubject = `Provao: ${folder.name}`;
       const megaOverview = `Exame unificado cobrindo ${folderStudies.length} estudos: ${folderStudies.map(s => s.title).join(', ')}.`;
       const allConcepts = folderStudies.flatMap(s => s.guide!.coreConcepts);
       const allCheckpoints = folderStudies.flatMap(s => s.guide!.checkpoints.map(cp => ({ ...cp, noteExactly: cp.noteExactly.substring(0, 200) }))); 
@@ -276,6 +276,7 @@ export function App() {
   const handleGenerateGuideForStudy = async (studyId: string, source: StudySource, mode: StudyMode) => {
     const isBinary = source.type === InputType.PDF || source.type === InputType.VIDEO || source.type === InputType.IMAGE;
     const isVideo = source.type === InputType.VIDEO;
+    const isParetoModeActive = mode === StudyMode.PARETO;
 
     setProcessingState({ isLoading: true, error: null, step: isVideo ? 'transcribing' : 'analyzing' });
 
@@ -283,7 +284,18 @@ export function App() {
         const progressTimer = setTimeout(() => {
             setProcessingState(prev => ({ ...prev, step: 'generating' }));
         }, 3500);
-        const guide = await generateStudyGuide(source.content, source.mimeType || 'text/plain', mode, isBinary);
+        let guide: StudyGuide;
+        if (isParetoModeActive) {
+            const summary = await generateParetoSummary(source.content, source.mimeType || 'text/plain', isBinary);
+            guide = {
+                subject: source.name || 'Pareto 80/20',
+                overview: summary,
+                coreConcepts: [],
+                checkpoints: []
+            };
+        } else {
+            guide = await generateStudyGuide(source.content, source.mimeType || 'text/plain', mode, isBinary);
+        }
         clearTimeout(progressTimer);
         setStudies(prev => prev.map(s => s.id === studyId ? { ...s, guide } : s));
         setProcessingState({ isLoading: false, error: null, step: 'idle' });
@@ -343,6 +355,16 @@ export function App() {
     setStudies(prev => prev.map(s => s.id === activeStudyId ? { ...s, quiz: null } : s));
   };
 
+  const goToHome = () => {
+    setIsParetoMode(false);
+    setActiveStudyId(null);
+    setActiveTab('sources');
+    setQuickInputMode('none');
+    setInputText('');
+    setSelectedFile(null);
+    setView('landing');
+  };
+
   if (view === 'landing') {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800">
@@ -351,32 +373,34 @@ export function App() {
                 <BrainCircuit className="w-8 h-8 text-indigo-600" />
                 <h1 className="text-xl font-bold text-gray-900">NeuroStudy Architect</h1>
             </div>
-            <button onClick={() => { setView('app'); setIsParetoMode(false); }} className="text-gray-500 hover:text-indigo-600 font-medium text-sm transition-colors">Entrar no Painel →</button>
+            <button onClick={() => { setView('app'); setIsParetoMode(false); }} className="text-gray-500 hover:text-indigo-600 font-medium text-sm transition-colors">
+                Entrar no Painel
+            </button>
         </header>
 
         <main className="flex-1 flex flex-col items-center justify-center p-6 text-center animate-fade-in">
             <div className="max-w-4xl mx-auto space-y-12">
                 <div className="space-y-4">
-                    <span className="inline-block py-1 px-3 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold uppercase tracking-widest border border-indigo-100">Neurociência Aplicada</span>
+                    <span className="inline-block py-1 px-3 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold uppercase tracking-widest border border-indigo-100">Neurociencia Aplicada</span>
                     <h2 className="text-5xl md:text-6xl font-extrabold text-slate-900 tracking-tight leading-tight">Pare de estudar.<br/><span className="text-indigo-600">Comece a aprender.</span></h2>
-                    <p className="text-xl text-slate-500 max-w-2xl mx-auto leading-relaxed">Transforme PDFs, Vídeos e Anotações em guias de estudo ativo, slides e quizzes automaticamente.</p>
+                    <p className="text-xl text-slate-500 max-w-2xl mx-auto leading-relaxed">Transforme PDFs, Videos e Anotacoes em guias de estudo ativo, slides e quizzes automaticamente.</p>
                 </div>
 
                 <div className="flex flex-col md:flex-row items-center justify-center gap-6">
                     <button onClick={() => { setView('app'); setIsParetoMode(false); }} className="group relative flex flex-col items-start p-6 bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-200 rounded-2xl transition-all w-full md:w-80 shadow-sm hover:shadow-xl hover:-translate-y-1">
                         <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 mb-4 group-hover:scale-110 transition-transform"><Layers className="w-8 h-8" /></div>
-                        <h3 className="text-lg font-bold text-gray-900">Método NeuroStudy</h3>
+                        <h3 className="text-lg font-bold text-gray-900">Metodo NeuroStudy</h3>
                         <p className="text-sm text-gray-500 mt-2 text-left">Acesso completo. Pastas, roteiros, flashcards e professor virtual.</p>
                         <span className="mt-4 text-indigo-600 font-bold text-sm flex items-center gap-1">Acessar Plataforma <ChevronRight className="w-4 h-4" /></span>
                     </button>
 
                     <div className="relative group w-full md:w-80">
-                        <input type="file" ref={paretoInputRef} className="hidden" onChange={handleParetoUpload} accept=".pdf, video/*, audio/*, image/*"/>
+                        <input type="file" ref={paretoInputRef} className="hidden" onChange={handleParetoUpload} accept=".pdf,video/*,audio/*,image/*" />
                         <button onClick={() => paretoInputRef.current?.click()} className="relative flex flex-col items-start p-6 bg-white hover:bg-red-50 border-2 border-red-100 hover:border-red-200 rounded-2xl transition-all w-full shadow-sm hover:shadow-xl hover:-translate-y-1 overflow-hidden">
                              <div className="absolute top-0 left-0 w-1 h-full bg-red-500"></div>
                             <div className="bg-red-100 p-3 rounded-xl text-red-600 mb-4 group-hover:scale-110 transition-transform"><Target className="w-8 h-8" /></div>
-                            <h3 className="text-lg font-bold text-gray-900">Método Pareto 80/20</h3>
-                            <p className="text-sm text-gray-500 mt-2 text-left">Extração rápida. Apenas o essencial do arquivo. Sem pastas, sem login.</p>
+                            <h3 className="text-lg font-bold text-gray-900">Metodo Pareto 80/20</h3>
+                            <p className="text-sm text-gray-500 mt-2 text-left">Extracao rapida. Apenas o essencial do arquivo.</p>
                             <span className="mt-4 text-red-600 font-bold text-sm flex items-center gap-1">Carregar Arquivo Agora <ChevronRight className="w-4 h-4" /></span>
                         </button>
                     </div>
@@ -384,7 +408,7 @@ export function App() {
 
                 <div className="pt-12 grid grid-cols-2 md:grid-cols-4 gap-8 opacity-60 grayscale hover:grayscale-0 transition-all">
                     <div className="flex flex-col items-center gap-2"><BookOpen className="w-6 h-6 text-gray-400" /><span className="text-xs font-bold text-gray-400">PDFs e Livros</span></div>
-                    <div className="flex flex-col items-center gap-2"><Video className="w-6 h-6 text-gray-400" /><span className="text-xs font-bold text-gray-400">Vídeo Aulas</span></div>
+                    <div className="flex flex-col items-center gap-2"><Video className="w-6 h-6 text-gray-400" /><span className="text-xs font-bold text-gray-400">Video Aulas</span></div>
                     <div className="flex flex-col items-center gap-2"><Camera className="w-6 h-6 text-gray-400" /><span className="text-xs font-bold text-gray-400">Fotos de Caderno</span></div>
                     <div className="flex flex-col items-center gap-2"><Globe className="w-6 h-6 text-gray-400" /><span className="text-xs font-bold text-gray-400">Sites e Artigos</span></div>
                 </div>
@@ -431,6 +455,9 @@ export function App() {
             )}
             
             <div className="flex items-center gap-6">
+                <button onClick={goToHome} className="text-sm font-semibold text-indigo-600 hover:text-indigo-700 transition-colors flex items-center gap-1">
+                    <ChevronRight className="w-4 h-4 rotate-180" /> Início
+                </button>
                 <div className="flex bg-gray-100 p-1 rounded-lg">
                     <button onClick={() => setActiveTab('sources')} className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${activeTab === 'sources' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}>Fontes</button>
                     <button onClick={() => setActiveTab('guide')} className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${activeTab === 'guide' ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}><BookOpen className="w-4 h-4" /> Roteiro</button>
@@ -445,7 +472,10 @@ export function App() {
         {isParetoMode && activeStudy && (
             <header className="h-16 border-b border-red-100 bg-red-50 flex items-center justify-between px-8 flex-shrink-0 z-10">
                 <div className="flex items-center gap-3">
-                    <button onClick={() => setView('landing')} className="p-1 hover:bg-red-100 rounded-full text-red-700" title="Voltar"><ChevronRight className="w-5 h-5 rotate-180"/></button>
+                    <button onClick={() => setView('landing')} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white text-red-700 border border-red-200 hover:bg-red-100 transition-colors" title="Voltar ao inicio">
+                        <ChevronRight className="w-5 h-5 rotate-180"/>
+                        <span className="text-sm font-semibold">Voltar ao inicio</span>
+                    </button>
                     <Target className="w-6 h-6 text-red-600"/>
                     <h2 className="text-xl font-bold text-red-800">Pareto 80/20: Resumo Essencial</h2>
                 </div>
@@ -454,13 +484,20 @@ export function App() {
         )}
 
         <main className="flex-1 overflow-y-auto bg-gray-50 p-8 scroll-smooth relative">
+            {processingState.error && (
+                <div className="max-w-5xl mx-auto mb-4">
+                    <div className="p-4 rounded-lg border border-red-200 bg-red-50 text-red-800 font-medium">
+                        {processingState.error}
+                    </div>
+                </div>
+            )}
             {!activeStudy ? (
                 <div className="h-full flex flex-col items-center justify-center max-w-6xl mx-auto relative">
                     {quickInputMode === 'none' ? (
                       <>
                         <div className="text-center mb-10">
-                            <h1 className="text-4xl font-extrabold text-gray-900 mb-4 tracking-tight">O que você vai <span className="text-indigo-600">aprender</span> hoje?</h1>
-                            <p className="text-lg text-gray-500 max-w-xl mx-auto">Transforme qualquer conteúdo em conhecimento ativo instantaneamente. Escolha uma fonte para começar.</p>
+                            <h1 className="text-4xl font-extrabold text-gray-900 mb-4 tracking-tight">O que voce vai <span className="text-indigo-600">aprender</span> hoje?</h1>
+                            <p className="text-lg text-gray-500 max-w-xl mx-auto">Transforme qualquer conteudo em conhecimento ativo instantaneamente. Escolha uma fonte para comecar.</p>
                         </div>
 
                          <div className="flex justify-center gap-4 mb-8">
@@ -469,7 +506,7 @@ export function App() {
                                     {mode === StudyMode.SURVIVAL && <BatteryCharging className="w-4 h-4" />}
                                     {mode === StudyMode.NORMAL && <Activity className="w-4 h-4" />}
                                     {mode === StudyMode.TURBO && <Rocket className="w-4 h-4" />}
-                                    <span className="text-sm font-bold capitalize">{mode === 'SURVIVAL' ? 'Sobrevivência' : mode}</span>
+                                    <span className="text-sm font-bold capitalize">{mode === 'SURVIVAL' ? 'Sobrevivencia' : mode}</span>
                                 </button>
                             ))}
                         </div>
@@ -486,7 +523,7 @@ export function App() {
                             <label className="group relative flex flex-col items-center justify-center p-6 bg-white border border-gray-200 rounded-2xl shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden">
                                 <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 origin-left scale-x-0 group-hover:scale-x-100 transition-transform"></div>
                                 <div className="p-3 bg-blue-50 rounded-full text-blue-600 mb-3 group-hover:bg-blue-600 group-hover:text-white transition-colors"><Video className="w-6 h-6" /></div>
-                                <h3 className="font-bold text-gray-900 mb-1">Vídeo/Áudio</h3>
+                                <h3 className="font-bold text-gray-900 mb-1">Video/Audio</h3>
                                 <p className="text-xs text-gray-500 text-center">Transcrever aula.</p>
                                 <input type="file" accept="video/*,audio/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if(file) handleQuickStart(file, InputType.VIDEO, selectedMode); }} />
                             </label>
@@ -495,7 +532,7 @@ export function App() {
                                 <div className="absolute top-0 left-0 w-full h-1 bg-pink-500 origin-left scale-x-0 group-hover:scale-x-100 transition-transform"></div>
                                 <div className="p-3 bg-pink-50 rounded-full text-pink-600 mb-3 group-hover:bg-pink-600 group-hover:text-white transition-colors"><Camera className="w-6 h-6" /></div>
                                 <h3 className="font-bold text-gray-900 mb-1">Foto Caderno</h3>
-                                <p className="text-xs text-gray-500 text-center">Anotações/Livros.</p>
+                                <p className="text-xs text-gray-500 text-center">Anotacoes/Livros.</p>
                                 <input type="file" accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if(file) handleQuickStart(file, InputType.IMAGE, selectedMode); }} />
                             </label>
 
@@ -517,13 +554,13 @@ export function App() {
                                 <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500 origin-left scale-x-0 group-hover:scale-x-100 transition-transform"></div>
                                 <div className="p-3 bg-emerald-50 rounded-full text-emerald-600 mb-3 group-hover:bg-emerald-600 group-hover:text-white transition-colors"><Link className="w-6 h-6" /></div>
                                 <h3 className="font-bold text-gray-900 mb-1">Artigo DOI</h3>
-                                <p className="text-xs text-gray-500 text-center">Busca científica.</p>
+                                <p className="text-xs text-gray-500 text-center">Busca cientifica.</p>
                             </button>
                         </div>
 
                         <div className="mt-12 flex items-center gap-2 text-gray-400 text-sm">
                             <BrainCircuit className="w-4 h-4" />
-                            <span>Suas pastas recentes estão na barra lateral à esquerda.</span>
+                            <span>Suas pastas recentes estao na barra lateral a esquerda.</span>
                         </div>
                       </>
                     ) : (
@@ -532,12 +569,12 @@ export function App() {
                              <h2 className="text-2xl font-bold text-gray-800">{inputType === InputType.DOI ? 'Colar DOI do Artigo' : inputType === InputType.URL ? 'Colar Link do Site' : 'Colar Texto para Estudo'}</h2>
                              <button onClick={() => setQuickInputMode('none')} className="text-gray-500 hover:text-gray-700">Cancelar</button>
                           </div>
-                          <textarea autoFocus className="w-full h-64 p-6 border border-gray-300 rounded-xl shadow-inner text-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none mb-4" placeholder={inputType === InputType.DOI ? "Ex: 10.1038/s41586-020-2012-7" : inputType === InputType.URL ? "Ex: https://pt.wikipedia.org/wiki/Neurociência" : "Cole o conteúdo aqui..."} value={inputText} onChange={(e) => setInputText(e.target.value)}></textarea>
+                          <textarea autoFocus className="w-full h-64 p-6 border border-gray-300 rounded-xl shadow-inner text-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none mb-4" placeholder={inputType === InputType.DOI ? "Ex: 10.1038/s41586-020-2012-7" : inputType === InputType.URL ? "Ex: https://pt.wikipedia.org/wiki/Neurociencia" : "Cole o conteudo aqui..."} value={inputText} onChange={(e) => setInputText(e.target.value)}></textarea>
                           <button onClick={() => handleQuickStart(inputText, inputType, selectedMode)} disabled={!inputText.trim()} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-lg hover:bg-indigo-700 shadow-lg shadow-indigo-200 disabled:opacity-50 transition-all active:scale-[0.99] flex items-center justify-center gap-2">
                              {selectedMode === StudyMode.TURBO && <Rocket className="w-5 h-5" />}
                              {selectedMode === StudyMode.NORMAL && <Activity className="w-5 h-5" />}
                              {selectedMode === StudyMode.SURVIVAL && <BatteryCharging className="w-5 h-5" />}
-                             Iniciar Estudo Agora ({selectedMode === 'SURVIVAL' ? 'Sobrevivência' : selectedMode})
+                             Iniciar Estudo Agora ({selectedMode === 'SURVIVAL' ? 'Sobrevivencia' : selectedMode})
                           </button>
                       </div>
                     )}
@@ -554,7 +591,7 @@ export function App() {
                                             <button onClick={() => setInputType(InputType.TEXT)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.TEXT ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Texto</button>
                                             <button onClick={() => setInputType(InputType.PDF)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.PDF ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>PDF</button>
                                             <button onClick={() => setInputType(InputType.IMAGE)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.IMAGE ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Imagem</button>
-                                            <button onClick={() => setInputType(InputType.VIDEO)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.VIDEO ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Vídeo</button>
+                                            <button onClick={() => setInputType(InputType.VIDEO)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.VIDEO ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Video</button>
                                             <button onClick={() => setInputType(InputType.URL)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.URL ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>Site</button>
                                             <button onClick={() => setInputType(InputType.DOI)} className={`flex-1 py-1.5 text-xs font-medium rounded ${inputType === InputType.DOI ? 'bg-white shadow text-indigo-700' : 'text-gray-500'}`}>DOI</button>
                                         </div>
@@ -564,7 +601,7 @@ export function App() {
                                             <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
                                                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                                                     <UploadCloud className="w-8 h-8 text-gray-400 mb-2" />
-                                                    <p className="text-sm text-gray-500">{selectedFile ? selectedFile.name : inputType === InputType.IMAGE ? "Upload de Imagem (JPG, PNG)" : inputType === InputType.VIDEO ? "Upload de Vídeo/Áudio" : "Upload de PDF"}</p>
+                                                    <p className="text-sm text-gray-500">{selectedFile ? selectedFile.name : inputType === InputType.IMAGE ? "Upload de Imagem (JPG, PNG)" : inputType === InputType.VIDEO ? "Upload de Video/Audio" : "Upload de PDF"}</p>
                                                 </div>
                                                 <input type="file" className="hidden" accept={inputType === InputType.VIDEO ? "video/*,audio/*" : inputType === InputType.IMAGE ? "image/png, image/jpeg, image/webp" : ".pdf"} onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
                                             </label>
@@ -581,7 +618,12 @@ export function App() {
                                             {activeStudy.sources.map(source => (
                                                 <li key={source.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 group">
                                                     <div className="flex items-center gap-3 overflow-hidden">
-                                                        {source.type === InputType.PDF ? <FileText className="w-4 h-4 text-red-500"/> : source.type === InputType.VIDEO ? <Video className="w-4 h-4 text-blue-500"/> : source.type === InputType.IMAGE ? <Camera className="w-4 h-4 text-pink-500"/> : source.type === InputType.DOI ? <Link className="w-4 h-4 text-emerald-500"/> : source.type === InputType.URL ? <Globe className="w-4 h-4 text-cyan-500"/> : <FileText className="w-4 h-4 text-gray-500"/>}
+                                                        {source.type === InputType.PDF ? <FileText className="w-4 h-4 text-red-500"/> : 
+                                                         source.type === InputType.VIDEO ? <Video className="w-4 h-4 text-blue-500"/> : 
+                                                         source.type === InputType.IMAGE ? <Camera className="w-4 h-4 text-pink-500"/> : 
+                                                         source.type === InputType.DOI ? <Link className="w-4 h-4 text-emerald-500"/> : 
+                                                         source.type === InputType.URL ? <Globe className="w-4 h-4 text-cyan-500"/> :
+                                                         <FileText className="w-4 h-4 text-gray-500"/>}
                                                         <span className="text-sm text-gray-700 truncate">{source.name}</span>
                                                     </div>
                                                     <button onClick={() => removeSource(source.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash className="w-4 h-4" /></button>
@@ -593,8 +635,8 @@ export function App() {
                             </div>
                             <div className={`border p-6 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4 transition-colors ${activeStudy.mode === StudyMode.SURVIVAL ? 'bg-red-50 border-red-100' : activeStudy.mode === StudyMode.TURBO ? 'bg-purple-50 border-purple-100' : 'bg-indigo-50 border-indigo-100'}`}>
                                 <div>
-                                    <h3 className={`font-bold text-lg ${activeStudy.mode === StudyMode.SURVIVAL ? 'text-red-900' : activeStudy.mode === StudyMode.TURBO ? 'text-purple-900' : 'text-indigo-900'}`}>{activeStudy.mode === StudyMode.SURVIVAL ? 'Modo Pareto 80/20 (Foco Essencial)' : activeStudy.mode === StudyMode.TURBO ? 'Modo Turbo (Detalhe Máximo)' : 'Pronto para transformar?'}</h3>
-                                    <p className={`text-sm ${activeStudy.mode === StudyMode.SURVIVAL ? 'text-red-700' : activeStudy.mode === StudyMode.TURBO ? 'text-purple-700' : 'text-indigo-700'}`}>{activeStudy.mode === StudyMode.SURVIVAL ? 'O NeuroStudy vai ignorar o ruído e extrair apenas os 20% do conteúdo que geram 80% do resultado.' : activeStudy.mode === StudyMode.TURBO ? 'Análise granular e detalhada para quem não pode perder nenhuma informação.' : 'O NeuroStudy vai analisar suas fontes e criar o roteiro perfeito.'}</p>
+                                    <h3 className={`font-bold text-lg ${activeStudy.mode === StudyMode.SURVIVAL ? 'text-red-900' : activeStudy.mode === StudyMode.TURBO ? 'text-purple-900' : 'text-indigo-900'}`}>{activeStudy.mode === StudyMode.SURVIVAL ? 'Modo Pareto 80/20 (Foco Essencial)' : activeStudy.mode === StudyMode.TURBO ? 'Modo Hard (Detalhe Maximo)' : 'Pronto para transformar?'}</h3>
+                                    <p className={`text-sm ${activeStudy.mode === StudyMode.SURVIVAL ? 'text-red-700' : activeStudy.mode === StudyMode.TURBO ? 'text-purple-700' : 'text-indigo-700'}`}>{activeStudy.mode === StudyMode.SURVIVAL ? 'O NeuroStudy vai ignorar o ruido e extrair apenas os 20% do conteudo que geram 80% do resultado.' : activeStudy.mode === StudyMode.TURBO ? 'Analise granular e detalhada para quem nao pode perder nenhuma informacao.' : 'O NeuroStudy vai analisar suas fontes e criar o roteiro perfeito.'}</p>
                                 </div>
                                 <div className="flex items-center gap-4">
                                     <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-gray-200">
@@ -602,11 +644,11 @@ export function App() {
                                         <div className="flex gap-1">
                                             <button onClick={() => updateStudyMode(activeStudy.id, StudyMode.SURVIVAL)} className={`p-1.5 rounded transition-colors ${activeStudy.mode === StudyMode.SURVIVAL ? 'bg-red-100 text-red-700 ring-2 ring-red-500 ring-offset-1' : 'hover:bg-gray-100 text-gray-400'}`} title="Pareto 80/20 (Essencial)"><Target className="w-4 h-4"/></button>
                                             <button onClick={() => updateStudyMode(activeStudy.id, StudyMode.NORMAL)} className={`p-1.5 rounded transition-colors ${activeStudy.mode === StudyMode.NORMAL ? 'bg-blue-100 text-blue-700 ring-2 ring-blue-500 ring-offset-1' : 'hover:bg-gray-100 text-gray-400'}`} title="Normal (Equilibrado)"><Activity className="w-4 h-4"/></button>
-                                            <button onClick={() => updateStudyMode(activeStudy.id, StudyMode.TURBO)} className={`p-1.5 rounded transition-colors ${activeStudy.mode === StudyMode.TURBO ? 'bg-purple-100 text-purple-700 ring-2 ring-purple-500 ring-offset-1' : 'hover:bg-gray-100 text-gray-400'}`} title="Turbo (Completo)"><Rocket className="w-4 h-4"/></button>
+                                            <button onClick={() => updateStudyMode(activeStudy.id, StudyMode.TURBO)} className={`p-1.5 rounded transition-colors ${activeStudy.mode === StudyMode.TURBO ? 'bg-purple-100 text-purple-700 ring-2 ring-purple-500 ring-offset-1' : 'hover:bg-gray-100 text-gray-400'}`} title="Hard (Completo)"><Rocket className="w-4 h-4"/></button>
                                         </div>
                                     </div>
                                     <button onClick={handleGenerateGuide} disabled={activeStudy.sources.length === 0 || processingState.isLoading} className={`px-8 py-3 rounded-xl font-bold text-lg text-white shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-transform active:scale-[0.99] ${activeStudy.mode === StudyMode.SURVIVAL ? 'bg-red-600 hover:bg-red-700 shadow-red-200' : activeStudy.mode === StudyMode.TURBO ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}>
-                                        {processingState.isLoading ? (<><span className="animate-spin text-white">⚙️</span> {processingState.step === 'transcribing' ? 'Transcrevendo...' : processingState.step === 'analyzing' ? 'Lendo...' : processingState.step === 'generating' ? 'Escrevendo...' : 'Processando...'}</>) : (<>{activeStudy.mode === StudyMode.SURVIVAL ? <Target className="w-5 h-5"/> : <BrainCircuit className="w-5 h-5" />} {activeStudy.mode === StudyMode.SURVIVAL ? 'Extrair Pareto 80/20' : 'Gerar Roteiro'}</>)}
+                                        {processingState.isLoading ? (<><span className="animate-spin text-white">...</span> {processingState.step === 'transcribing' ? 'Transcrevendo...' : processingState.step === 'analyzing' ? 'Lendo...' : processingState.step === 'generating' ? 'Escrevendo...' : 'Processando...'}</>) : (<>{activeStudy.mode === StudyMode.SURVIVAL ? <Target className="w-5 h-5"/> : <BrainCircuit className="w-5 h-5" />} {activeStudy.mode === StudyMode.SURVIVAL ? 'Extrair Pareto 80/20' : 'Gerar Roteiro'}</>)}
                                     </button>
                                 </div>
                             </div>
@@ -616,7 +658,7 @@ export function App() {
                     {(activeTab === 'guide' || isParetoMode) && (
                         activeStudy.guide || processingState.isLoading ? (
                             processingState.isLoading && isParetoMode ? (
-                                <div className="flex flex-col items-center justify-center h-96"><div className="w-16 h-16 border-4 border-red-200 border-t-red-600 rounded-full animate-spin mb-4"></div><h3 className="text-xl font-bold text-gray-700">Extraindo a essência (80/20)...</h3><p className="text-gray-500">Isso pode levar alguns segundos.</p></div>
+                                <div className="flex flex-col items-center justify-center h-96"><div className="w-16 h-16 border-4 border-red-200 border-t-red-600 rounded-full animate-spin mb-4"></div><h3 className="text-xl font-bold text-gray-700">Extraindo a essencia (80/20)...</h3><p className="text-gray-500">Isso pode levar alguns segundos.</p></div>
                             ) : activeStudy.guide ? (
                                 <ResultsView 
                                     guide={activeStudy.guide} 
@@ -634,7 +676,7 @@ export function App() {
 
                     {activeTab === 'slides' && !isParetoMode && (
                          <div className="animate-fade-in">
-                            {activeStudy.slides ? (<SlidesView slides={activeStudy.slides} />) : (<div className="flex flex-col items-center justify-center py-20 text-center"><Monitor className="w-16 h-16 text-gray-200 mb-4" /><h3 className="text-xl font-bold text-gray-700 mb-2">Slides de Aula</h3><p className="text-gray-500 mb-6 max-w-md">Gere uma apresentação estruturada pronta para usar ou revisar, baseada no seu roteiro.</p><button onClick={handleGenerateSlides} disabled={!activeStudy.guide || processingState.isLoading} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50">{processingState.isLoading ? 'Criando Slides...' : 'Gerar Slides Agora'}</button></div>)}
+                            {activeStudy.slides ? (<SlidesView slides={activeStudy.slides} />) : (<div className="flex flex-col items-center justify-center py-20 text-center"><Monitor className="w-16 h-16 text-gray-200 mb-4" /><h3 className="text-xl font-bold text-gray-700 mb-2">Slides de Aula</h3><p className="text-gray-500 mb-6 max-w-md">Gere uma apresentacao estruturada pronta para usar ou revisar, baseada no seu roteiro.</p><button onClick={handleGenerateSlides} disabled={!activeStudy.guide || processingState.isLoading} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50">{processingState.isLoading ? 'Criando Slides...' : 'Gerar Slides Agora'}</button></div>)}
                          </div>
                     )}
 
@@ -659,3 +701,6 @@ export function App() {
     </div>
   );
 }
+
+
+

@@ -11,7 +11,8 @@ export enum InputType {
 export enum StudyMode {
   TURBO = 'TURBO',
   NORMAL = 'NORMAL',
-  SURVIVAL = 'SURVIVAL'
+  SURVIVAL = 'SURVIVAL',
+  PARETO = 'PARETO'
 }
 
 export interface CoreConcept {
@@ -80,6 +81,7 @@ export interface StudySession {
   slides: Slide[] | null;
   quiz: QuizQuestion[] | null;
   flashcards: Flashcard[] | null;
+  paretoText?: string;
   createdAt: number;
   updatedAt: number;
 }
