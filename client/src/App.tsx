@@ -73,13 +73,14 @@ export function App() {
 
   const moveFolder = (folderId: string, targetParentId: string | undefined) => {
     if (folderId === targetParentId) return;
-    let current = folders.find(f => f.id === targetParentId);
+    let current = targetParentId ? folders.find(f => f.id === targetParentId) : undefined;
     while (current) {
         if (current.id === folderId) {
             console.warn("Cannot move folder into its own child");
             return;
         }
-        current = folders.find(f => f.id === current.parentId);
+        const parentId = current.parentId;
+        current = parentId ? folders.find(f => f.id === parentId) : undefined;
     }
     setFolders(prev => prev.map(f => f.id === folderId ? { ...f, parentId: targetParentId } : f));
   };
@@ -664,7 +665,11 @@ export function App() {
                                     guide={activeStudy.guide} 
                                     onReset={() => { setActiveTab('sources'); if(isParetoMode) setIsParetoMode(false); }}
                                     onGenerateQuiz={() => setActiveTab('quiz')}
-                                    onUpdateGuide={(newGuide) => updateStudyGuide(activeStudyId, newGuide)}
+                                    onUpdateGuide={(newGuide) => {
+                                        if (activeStudy) {
+                                            updateStudyGuide(activeStudy.id, newGuide);
+                                        }
+                                    }}
                                     isParetoOnly={isParetoMode}
                                     onUnlockFullStudy={() => setIsParetoMode(false)}
                                 />
