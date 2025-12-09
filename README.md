@@ -31,4 +31,4 @@ View your app in AI Studio: https://ai.studio/apps/drive/1WYfGVBkC_yGzSnrDt5ddjp
 ## Troubleshooting
 
 - **TypeScript cannot find Node typings** (`Cannot find type definition file for 'node'`):
-  Run `npm install --include=dev` to reinstall dependencies (including `@types/node`) before building with `npm run build`. If you previously ran installs with production-only flags such as `--omit=dev`, rerun the install without them so the typings are restored.
+  `@types/node` now installs with the rest of the dependencies. If you still see this error, rerun `npm install` (without `--omit=dev` or `--production`) so the typings are restored before `npm run build`.
